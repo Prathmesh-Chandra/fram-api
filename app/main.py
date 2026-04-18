@@ -5,7 +5,7 @@ app = FastAPI(title="FRAM API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "https://fram-frontend-ht7yg1n5d-f20230404-4486s-projects.vercel.app/"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

@@ -1,18 +1,46 @@
 from fastapi import APIRouter, HTTPException
+import os
 from app.utils.yfinance_client import get_history
 from app.data.nifty50 import NIFTY50
+from app.modules.liquidity import rank_universe_by_turnover
 from app.data.instrument_keys import get_instrument_key_candidates, normalize_ticker
 from app.utils.upstox_client import (
     get_auth_url, exchange_code_for_token,
-    get_token_status, get_option_chain
+    get_token_status, get_option_chain, is_authenticated
 )
-from fastapi.responses import RedirectResponse, HTMLResponse
+from fastapi.responses import RedirectResponse
+from functools import lru_cache
 
 router = APIRouter()
 
 @router.get("/universe")
 def universe():
-    return {"stocks": NIFTY50, "count": len(NIFTY50)}
+    return _get_universe_payload()
+
+
+@lru_cache(maxsize=1)
+def _get_universe_payload():
+    try:
+        ranked = rank_universe_by_turnover(period="6mo")
+        return {
+            "liquid": ranked.get("liquid", []),
+            "illiquid": ranked.get("illiquid", []),
+            "all": ranked.get("all", []),
+            "count": len(ranked.get("all", [])),
+        }
+    except Exception:
+        # Safe fallback keeps frontend functional if live ranking fails.
+        midpoint = len(NIFTY50) // 2
+        liquid = [{"ticker": t, "avg_turnover_cr": None} for t in NIFTY50[:midpoint]]
+        illiquid = [{"ticker": t, "avg_turnover_cr": None} for t in NIFTY50[midpoint:]]
+        all_stocks = liquid + illiquid
+        return {
+            "liquid": liquid,
+            "illiquid": illiquid,
+            "all": all_stocks,
+            "count": len(all_stocks),
+            "warning": "Using static fallback universe because turnover ranking failed",
+        }
 
 @router.get("/history")
 def history(ticker: str, period: str = "6mo"):
@@ -28,14 +56,9 @@ def upstox_login():
 
 @router.get("/upstox/callback")
 def upstox_callback(code: str):
-    result = exchange_code_for_token(code)
-    return HTMLResponse(f"""
-        <html><body>
-            <h2>Authenticated</h2>
-            <p>Token valid for <b>{result['expires_at']}</b></p>
-            <p>You can close this tab.</p>
-        </body></html>
-    """)
+    exchange_code_for_token(code)
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    return RedirectResponse(url=f"{frontend_url}/")
 
 @router.get("/upstox/status")
 def upstox_status():
@@ -50,6 +73,16 @@ def option_chain(ticker: str, expiry: str):
     normalized_ticker = normalize_ticker(ticker)
     instrument_candidates = get_instrument_key_candidates(normalized_ticker)
 
+    if not is_authenticated():
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "UPSTOX_AUTH_REQUIRED",
+                "message": "Upstox login required",
+                "login_url": "/data/upstox/login",
+            },
+        )
+
     if not instrument_candidates:
         raise HTTPException(
             status_code=400, 
@@ -62,6 +95,15 @@ def option_chain(ticker: str, expiry: str):
     for instrument_key in instrument_candidates:
         data = get_option_chain(instrument_key, expiry)
         if "error" in data:
+            if data.get("status_code") == 401:
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "code": "UPSTOX_AUTH_REQUIRED",
+                        "message": data.get("message", "Upstox login required"),
+                        "login_url": data.get("login_url", "/data/upstox/login"),
+                    },
+                )
             errors.append({"instrument_key": instrument_key, "error": data["error"]})
             continue
 

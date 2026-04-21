@@ -33,14 +33,14 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 class VolatilityRequest(BaseModel):
     ticker:     str         = Field(...,  example="RELIANCE.NS")
-    period:     str         = Field("6mo", example="6mo")
+    period:     str         = Field("122d", example="122d")
     vol_window: int         = Field(20,   ge=5, le=60)
     acf_lags:   int         = Field(20,   ge=5, le=40)
 
 
 class LiquidityRequest(BaseModel):
     ticker: str = Field(...,  example="RELIANCE.NS")
-    period: str = Field("6mo", example="6mo")
+    period: str = Field("122d", example="122d")
 
 
 class PartARequest(BaseModel):
@@ -50,7 +50,7 @@ class PartARequest(BaseModel):
     """
     liquid_ticker:   str = Field(..., example="RELIANCE.NS")
     illiquid_ticker: str = Field(..., example="DIVISLAB.NS")
-    period:          str = Field("6mo", example="6mo")
+    period:          str = Field("122d", example="122d")
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +188,10 @@ async def part_a_combined(req: PartARequest):
             "avg_amihud_1e7": {
                 "liquid":   ll["summary_stats"]["avg_amihud_scaled_1e7"],
                 "illiquid": il["summary_stats"]["avg_amihud_scaled_1e7"],
+            },
+            "avg_amihud_1e10": {
+                "liquid":   ll["summary_stats"]["avg_amihud_scaled_1e10"],
+                "illiquid": il["summary_stats"]["avg_amihud_scaled_1e10"],
             },
             "correlation_liquid": {
                 "vol_vs_turnover_r": ll["correlation"]["interpretation"]["vol_vs_turnover_r"],

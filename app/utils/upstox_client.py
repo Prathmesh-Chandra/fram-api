@@ -13,6 +13,15 @@ _token_state = {
     "expires_at":   0,
 }
 
+
+def auth_required_response() -> dict:
+    return {
+        "error": "AUTH_REQUIRED",
+        "message": "Not authenticated. Visit /data/upstox/login",
+        "status_code": 401,
+        "login_url": "/data/upstox/login",
+    }
+
 def get_auth_url() -> str:
     return (
         f"{BASE_URL}/login/authorization/dialog"
@@ -50,13 +59,22 @@ def get_headers() -> dict:
 
 def get_token_status() -> dict:
     if not _token_state["access_token"]:
-        return {"authenticated": False, "reason": "No token. Visit /data/upstox/login"}
+        return {
+            "authenticated": False,
+            "reason": "No token. Visit /data/upstox/login",
+            "login_url": "/data/upstox/login",
+        }
     time_left = _token_state["expires_at"] - time.time()
     if time_left <= 0:
-        return {"authenticated": False, "reason": "Token expired. Visit /data/upstox/login"}
+        return {
+            "authenticated": False,
+            "reason": "Token expired. Visit /data/upstox/login",
+            "login_url": "/data/upstox/login",
+        }
     return {
-        "authenticated":    True,
+        "authenticated": True,
         "expires_in_hours": round(time_left / 3600, 1),
+        "user_name": _get_user_display_name(),
     }
 
 
@@ -71,10 +89,27 @@ def _request_upstox(path: str, params: dict) -> dict:
         return {"error": f"Upstox API request failed: {str(e)}"}
 
 
+def _get_user_display_name() -> str | None:
+    if not is_authenticated():
+        return None
+
+    profile = _request_upstox("/user/profile", {})
+    if "error" in profile:
+        return None
+
+    data = profile.get("data") or {}
+    return (
+        data.get("user_name")
+        or data.get("name")
+        or data.get("user_id")
+        or data.get("email")
+    )
+
+
 def get_option_contracts(instrument_key: str) -> dict:
     """Fetches option contracts for an underlying to discover valid expiries."""
     if not is_authenticated():
-        return {"error": "Not authenticated. Visit /data/upstox/login"}
+        return auth_required_response()
     return _request_upstox("/option/contract", {"instrument_key": instrument_key})
 
 
@@ -118,7 +153,7 @@ def get_option_chain(instrument_key: str, expiry_date: str) -> dict:
     Fetches the live option chain from Upstox for a specific instrument and expiry.
     """
     if not is_authenticated():
-        return {"error": "Not authenticated. Visit /data/upstox/login"}
+        return auth_required_response()
 
     first_attempt = _request_upstox(
         "/option/chain",
@@ -195,6 +230,8 @@ def get_option_chain_data(ticker: str, expiry: str | None = None) -> dict:
     if not expiry:
         for key in candidates:
             contracts = get_option_contracts(key)
+            if contracts.get("status_code") == 401:
+                return contracts
             if "error" not in contracts and "data" in contracts:
                 expiries = sorted({c.get("expiry") for c in contracts.get("data", []) if c.get("expiry")})
                 if expiries:
@@ -204,6 +241,8 @@ def get_option_chain_data(ticker: str, expiry: str | None = None) -> dict:
     # Scenario 2: Fetching the actual option chain for a specific expiry
     for key in candidates:
         data = get_option_chain(key, expiry)
+        if data.get("status_code") == 401:
+            return data
         if "error" not in data and data.get("data"):
              return {
                  "status": "success", 

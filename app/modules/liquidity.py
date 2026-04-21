@@ -35,16 +35,68 @@ def compute_turnover_inr(close: pd.Series, volume: pd.Series) -> pd.Series:
 
 def compute_turnover_ratio(
     turnover_inr: pd.Series,
-    rolling_window: int = 60,
+    market_cap_inr: pd.Series,
 ) -> pd.Series:
     """
-    Relative turnover ratio = daily_turnover / rolling_mean(turnover, 60d)
+    Turnover ratio = daily traded value / market capitalization.
 
-    Values > 1 → above-average liquidity day.
-    Values < 1 → below-average liquidity day.
+    Equivalent interpretation: fraction of market cap traded per day.
     """
-    rolling_mean = turnover_inr.rolling(rolling_window).mean()
-    return (turnover_inr / rolling_mean).replace([np.inf, -np.inf], np.nan)
+    return (turnover_inr / market_cap_inr).replace([np.inf, -np.inf], np.nan)
+
+
+def get_market_cap_series(ticker: str, close: pd.Series) -> tuple[pd.Series, str]:
+    """
+    Build a market-cap series used by turnover ratio.
+
+    Preferred method uses shares outstanding so market cap changes with price.
+    If unavailable, fallback to static market cap from fast_info/info.
+    """
+    t = yf.Ticker(ticker)
+
+    shares_out = None
+    method = ""
+
+    try:
+        fi = t.fast_info
+        shares_out = fi.get("shares") if fi is not None else None
+    except Exception:
+        shares_out = None
+
+    if shares_out is None:
+        try:
+            info = t.info or {}
+            shares_out = info.get("sharesOutstanding")
+        except Exception:
+            shares_out = None
+
+    if shares_out and shares_out > 0:
+        method = "volume_over_shares_outstanding"
+        mcap = close * float(shares_out)
+        return mcap.replace([np.inf, -np.inf], np.nan), method
+
+    market_cap = None
+    try:
+        fi = t.fast_info
+        market_cap = fi.get("marketCap") if fi is not None else None
+    except Exception:
+        market_cap = None
+
+    if market_cap is None:
+        try:
+            info = t.info or {}
+            market_cap = info.get("marketCap")
+        except Exception:
+            market_cap = None
+
+    if market_cap and market_cap > 0:
+        method = "value_over_static_market_cap"
+        mcap = pd.Series(float(market_cap), index=close.index)
+        return mcap, method
+
+    raise ValueError(
+        f"Unable to compute turnover ratio for {ticker}: market cap/shares outstanding unavailable"
+    )
 
 
 def compute_amihud(
@@ -75,7 +127,7 @@ def compute_amihud(
 # 2.  Enriched DataFrame builder
 # ---------------------------------------------------------------------------
 
-def build_liquidity_df(df: pd.DataFrame) -> pd.DataFrame:
+def build_liquidity_df(df: pd.DataFrame, ticker: str) -> tuple[pd.DataFrame, str]:
     """
     Expects a DataFrame with at least:  Close, Volume, Log_Return
 
@@ -90,8 +142,9 @@ def build_liquidity_df(df: pd.DataFrame) -> pd.DataFrame:
     """
     out = df.copy()
 
-    out["Turnover_INR"]   = compute_turnover_inr(out["Close"], out["Volume"])
-    out["Turnover_Ratio"] = compute_turnover_ratio(out["Turnover_INR"])
+    out["Turnover_INR"] = compute_turnover_inr(out["Close"], out["Volume"])
+    market_cap_inr, method = get_market_cap_series(ticker, out["Close"])
+    out["Turnover_Ratio"] = compute_turnover_ratio(out["Turnover_INR"], market_cap_inr)
 
     out["Amihud_Raw"], out["Amihud_MA"] = compute_amihud(
         out["Log_Return"], out["Turnover_INR"]
@@ -100,7 +153,7 @@ def build_liquidity_df(df: pd.DataFrame) -> pd.DataFrame:
     out = out.dropna(subset=["Turnover_Ratio", "Amihud_MA"])
     out = _classify_liquidity(out)
 
-    return out
+    return out, method
 
 
 def _classify_liquidity(df: pd.DataFrame) -> pd.DataFrame:
@@ -130,7 +183,8 @@ def liquidity_summary_stats(df: pd.DataFrame, ticker: str) -> dict:
     """
     avg_turnover_cr   = float(df["Turnover_INR"].mean() / 1e7)   # Crores
     avg_amihud        = float(df["Amihud_Raw"].mean())
-    avg_amihud_scaled = avg_amihud * 1e7                           # scaled for display
+    avg_amihud_scaled_1e7 = avg_amihud * 1e7
+    avg_amihud_scaled_1e10 = avg_amihud * 1e10
 
     liq_counts = df["Liq_Class"].value_counts().to_dict()
 
@@ -139,7 +193,8 @@ def liquidity_summary_stats(df: pd.DataFrame, ticker: str) -> dict:
         "avg_daily_turnover_cr":         round(avg_turnover_cr,   2),
         "avg_daily_turnover_inr":        round(avg_turnover_cr * 1e7, 0),
         "avg_amihud_raw":                round(avg_amihud,        10),
-        "avg_amihud_scaled_1e7":         round(avg_amihud_scaled,  6),
+        "avg_amihud_scaled_1e7":         round(avg_amihud_scaled_1e7,  6),
+        "avg_amihud_scaled_1e10":        round(avg_amihud_scaled_1e10, 6),
         "turnover_ratio_mean":           round(float(df["Turnover_Ratio"].mean()), 4),
         "turnover_ratio_std":            round(float(df["Turnover_Ratio"].std()),  4),
         "liq_class_counts":              liq_counts,
@@ -319,8 +374,8 @@ def get_liquidity_analysis(
     from app.modules.volatility import fetch_price_df, build_price_df
 
     df_raw = fetch_price_df(ticker, period=period)
-    df     = build_price_df(df_raw)                  # adds Log_Return, RolVol_20d
-    df     = build_liquidity_df(df)                  # adds Turnover_*, Amihud_*
+    df = build_price_df(df_raw)                             # adds Log_Return, RolVol_20d
+    df, turnover_ratio_method = build_liquidity_df(df, ticker=ticker)  # adds Turnover_*, Amihud_*
 
     summary     = liquidity_summary_stats(df, ticker)
     correlation = vol_liquidity_correlation(df, ticker)
@@ -329,6 +384,7 @@ def get_liquidity_analysis(
     return {
         "ticker":        ticker,
         "period":        period,
+        "turnover_ratio_method": turnover_ratio_method,
         "summary_stats": summary,
         "correlation":   correlation,
         "timeseries":    ts,

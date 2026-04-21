@@ -213,11 +213,21 @@ async def part_b_pricing_table(req: PartBRequest):
         # ── Step 2: Get available expiries (call chain with no expiry filter) ─
         nifty_ticker = _normalise_ticker(req.ticker)
         chain_resp   = get_option_chain_data(ticker=nifty_ticker, expiry=None)
+        
+        if chain_resp.get("status_code") == 401 or chain_resp.get("error") == "AUTH_REQUIRED":
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "code": "UPSTOX_AUTH_REQUIRED",
+                    "message": chain_resp.get("message", "Upstox login required"),
+                    "login_url": chain_resp.get("login_url", "/data/upstox/login"),
+                },
+            )
 
         if chain_resp.get("status") != "success":
             raise HTTPException(
                 status_code=502,
-                detail="Option chain unavailable — check Upstox auth (/data/upstox/status)"
+                detail="Option chain unavailable — check Upstox API."
             )
 
         available_expiries = chain_resp.get("available_expiries", [])
@@ -314,6 +324,20 @@ async def part_b_compare_stocks(
     if target_maturities is None:
         target_maturities = [30, 60]
 
+    def _empty_part_b_payload(ticker: str, error_detail=None, status_code: int | None = None) -> dict:
+        return {
+            "ticker": ticker,
+            "spot": None,
+            "hist_vol_pct": None,
+            "pricing_table": [],
+            "garch": None,
+            "expiry_map": {},
+            "error": {
+                "status_code": status_code,
+                "detail": error_detail,
+            } if error_detail is not None else None,
+        }
+
     req_liquid   = PartBRequest(
         ticker=liquid_ticker,   target_maturities=target_maturities,
         r=r, include_garch=include_garch, period=period,
@@ -323,13 +347,39 @@ async def part_b_compare_stocks(
         r=r, include_garch=include_garch, period=period,
     )
 
-    async def _run(req):
-        return await part_b_pricing_table(req)
+    async def _run_safe(req: PartBRequest):
+        try:
+            result = await part_b_pricing_table(req)
+            return {
+                "ok": True,
+                "data": result["data"],
+                "error": None,
+                "status_code": 200,
+            }
+        except HTTPException as exc:
+            return {
+                "ok": False,
+                "data": _empty_part_b_payload(req.ticker, exc.detail, exc.status_code),
+                "error": exc.detail,
+                "status_code": exc.status_code,
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "data": _empty_part_b_payload(req.ticker, str(exc), 500),
+                "error": str(exc),
+                "status_code": 500,
+            }
 
     liquid_result, illiquid_result = await asyncio.gather(
-        _run(req_liquid),
-        _run(req_illiquid),
+        _run_safe(req_liquid),
+        _run_safe(req_illiquid),
     )
+
+    # Preserve existing auth flow: if Upstox auth is invalid, bubble up 401.
+    for result in (liquid_result, illiquid_result):
+        if result.get("status_code") == 401:
+            raise HTTPException(status_code=401, detail=result.get("error"))
 
     liquid_data   = liquid_result["data"]
     illiquid_data = illiquid_result["data"]
@@ -364,11 +414,19 @@ async def part_b_compare_stocks(
             "illiquid": illiquid_data["garch"]["vol_comparison"].get("garch_vol_pct"),
         }
 
+    ok_count = int(bool(liquid_result.get("ok"))) + int(bool(illiquid_result.get("ok")))
+    overall_status = "success" if ok_count == 2 else "partial_success"
+
     return {
-        "status": "success",
+        "status": overall_status,
         "data": {
             "liquid":     liquid_data,
             "illiquid":   illiquid_data,
             "comparison": comparison,
+            "errors": {
+                "liquid": None if liquid_result.get("ok") else liquid_result.get("error"),
+                "illiquid": None if illiquid_result.get("ok") else illiquid_result.get("error"),
+            },
         },
     }
+  

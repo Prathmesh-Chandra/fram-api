@@ -19,8 +19,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import yfinance as yf
-from datetime import datetime, timedelta
-from typing import Literal
+import re
 
 
 # ---------------------------------------------------------------------------
@@ -44,12 +43,27 @@ def fetch_price_df(ticker: str, period: str = "6mo") -> pd.DataFrame:
     ------
     ValueError  if fewer than 60 rows were returned (likely a bad ticker).
     """
-    raw = yf.download(
-        ticker,
-        period=period,
-        auto_adjust=True,
-        progress=False,
-    )
+    period = (period or "6mo").strip().lower()
+    day_match = re.fullmatch(r"(\d+)d", period)
+
+    if day_match:
+        # yfinance period does not reliably support arbitrary Nd values,
+        # so fetch a broader horizon then trim to the latest N trading rows.
+        lookback_days = int(day_match.group(1))
+        raw = yf.download(
+            ticker,
+            period="1y",
+            auto_adjust=True,
+            progress=False,
+        )
+    else:
+        lookback_days = None
+        raw = yf.download(
+            ticker,
+            period=period,
+            auto_adjust=True,
+            progress=False,
+        )
 
     # yfinance sometimes returns a MultiIndex on single-ticker downloads
     if isinstance(raw.columns, pd.MultiIndex):
@@ -62,6 +76,13 @@ def fetch_price_df(ticker: str, period: str = "6mo") -> pd.DataFrame:
 
     df.index = pd.to_datetime(df.index)
     df.sort_index(inplace=True)
+
+    if lookback_days is not None:
+        if len(df) < lookback_days:
+            raise ValueError(
+                f"Only {len(df)} rows returned for {ticker}, fewer than requested {lookback_days} trading days."
+            )
+        df = df.tail(lookback_days)
 
     if len(df) < 60:
         raise ValueError(
@@ -154,7 +175,7 @@ def build_price_df(df: pd.DataFrame, vol_window: int = 20) -> pd.DataFrame:
 # 4.  Summary statistics
 # ---------------------------------------------------------------------------
 
-def vol_summary_stats(returns: pd.Series, ticker: str) -> dict:
+def vol_summary_stats(returns: pd.Series, ticker: str, n_trading_days: int | None = None) -> dict:
     """
     Compute the summary statistics table required by Part A.
 
@@ -167,7 +188,7 @@ def vol_summary_stats(returns: pd.Series, ticker: str) -> dict:
 
     return {
         "ticker":              ticker,
-        "n_trading_days":      int(len(r)),
+        "n_trading_days":      int(n_trading_days if n_trading_days is not None else len(r)),
         "mean_daily_return":   round(float(r.mean()),               6),
         "std_daily_return":    round(float(r.std()),                 6),
         "skewness":            round(float(sp_stats.skew(r)),        4),
@@ -251,7 +272,7 @@ def get_volatility_analysis(
     df     = build_price_df(df_raw, vol_window=vol_window)
     df     = classify_vol_regime(df)
 
-    summary   = vol_summary_stats(df["Log_Return"], ticker)
+    summary   = vol_summary_stats(df["Log_Return"], ticker, n_trading_days=len(df_raw))
     clustering = compute_vol_clustering(df["Log_Return"], lags=acf_lags)
     ts         = vol_timeseries_payload(df, ticker)
 

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 import os
-from app.utils.yfinance_client import get_history
+from app.utils.yfinance_client import get_history, get_live_indices_snapshot
 from app.data.nifty50 import NIFTY50
 from app.modules.liquidity import rank_universe_by_turnover
 from app.data.instrument_keys import get_instrument_key_candidates, normalize_ticker
@@ -63,6 +63,22 @@ def history(ticker: str, period: str = "6mo"):
     if data is None:
         raise HTTPException(status_code=404, detail=f"No data found for {ticker}")
     return data
+
+
+@router.get("/indices/live")
+def live_indices():
+    rows = get_live_indices_snapshot()
+    ok_count = sum(1 for row in rows if row.get("value") is not None)
+
+    if ok_count == 0:
+        raise HTTPException(status_code=502, detail="Unable to fetch live index data")
+
+    return {
+        "status": "success" if ok_count == len(rows) else "partial_success",
+        "data": {
+            "indices": rows,
+        },
+    }
 
 
 @router.get("/upstox/login")

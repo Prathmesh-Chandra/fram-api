@@ -10,8 +10,23 @@ from app.utils.upstox_client import (
 )
 from fastapi.responses import RedirectResponse
 from functools import lru_cache
+from urllib.parse import urlparse
 
 router = APIRouter()
+
+
+def _normalize_public_url(raw: str, local_default_scheme: str = "http") -> str:
+    value = (raw or "").strip().strip('"').strip("'")
+    if not value:
+        return value
+
+    if urlparse(value).scheme:
+        return value
+
+    if value.startswith("localhost") or value.startswith("127.0.0.1"):
+        return f"{local_default_scheme}://{value}"
+
+    return f"https://{value}"
 
 @router.get("/universe")
 def universe():
@@ -52,12 +67,20 @@ def history(ticker: str, period: str = "6mo"):
 
 @router.get("/upstox/login")
 def upstox_login():
-    return RedirectResponse(url=get_auth_url())
+    try:
+        return RedirectResponse(url=get_auth_url())
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/upstox/callback")
 def upstox_callback(code: str):
-    exchange_code_for_token(code)
-    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    try:
+        exchange_code_for_token(code)
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    frontend_url = _normalize_public_url(
+        os.getenv("FRONTEND_URL", "http://localhost:5173")
+    ).rstrip("/")
     return RedirectResponse(url=f"{frontend_url}/")
 
 @router.get("/upstox/status")

@@ -2,13 +2,37 @@ import os
 import time
 import requests
 from datetime import datetime
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
-UPSTOX_API_KEY    = os.getenv("UPSTOX_API_KEY")
-UPSTOX_API_SECRET = os.getenv("UPSTOX_API_SECRET")
-UPSTOX_REDIRECT_URI = os.getenv(
-    "UPSTOX_REDIRECT_URI",
-    "https://web-production-06c6e.up.railway.app/data/upstox/callback",
+
+def _clean_env(name: str, default: str | None = None) -> str | None:
+    value = os.getenv(name, default)
+    if value is None:
+        return None
+    return value.strip().strip('"').strip("'")
+
+
+def _normalize_url(value: str | None) -> str | None:
+    if not value:
+        return value
+
+    parsed = urlparse(value)
+    if parsed.scheme:
+        return value
+
+    if value.startswith("localhost") or value.startswith("127.0.0.1"):
+        return f"http://{value}"
+
+    return f"https://{value}"
+
+
+UPSTOX_API_KEY = _clean_env("UPSTOX_API_KEY")
+UPSTOX_API_SECRET = _clean_env("UPSTOX_API_SECRET")
+UPSTOX_REDIRECT_URI = _normalize_url(
+    _clean_env(
+        "UPSTOX_REDIRECT_URI",
+        "https://web-production-06c6e.up.railway.app/data/upstox/callback",
+    )
 )
 BASE_URL = "https://api.upstox.com/v2"
 
@@ -27,6 +51,12 @@ def auth_required_response() -> dict:
     }
 
 def get_auth_url() -> str:
+    if not UPSTOX_API_KEY or not UPSTOX_REDIRECT_URI:
+        raise ValueError(
+            "Upstox auth is misconfigured. Set UPSTOX_API_KEY and "
+            "UPSTOX_REDIRECT_URI in backend environment variables."
+        )
+
     query = urlencode(
         {
             "response_type": "code",
@@ -39,6 +69,12 @@ def get_auth_url() -> str:
     )
 
 def exchange_code_for_token(auth_code: str) -> dict:
+    if not UPSTOX_API_KEY or not UPSTOX_API_SECRET or not UPSTOX_REDIRECT_URI:
+        raise ValueError(
+            "Upstox token exchange is misconfigured. Set UPSTOX_API_KEY, "
+            "UPSTOX_API_SECRET, and UPSTOX_REDIRECT_URI."
+        )
+
     response = requests.post(
         f"{BASE_URL}/login/authorization/token",
         headers={"Content-Type": "application/x-www-form-urlencoded"},

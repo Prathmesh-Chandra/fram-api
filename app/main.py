@@ -1,3 +1,5 @@
+import os
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -9,6 +11,26 @@ from app.scheduler import start_scheduler, stop_scheduler
 from app.routers.analytics import router as analytics_router
 from app.routers import pricing, hedging, risk
 
+
+def _build_allowed_origins() -> list[str]:
+    origins = {
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://fram-frontend.vercel.app",
+    }
+
+    frontend_url = os.getenv("FRONTEND_URL")
+    if frontend_url:
+        origins.add(frontend_url.rstrip("/"))
+
+    extra_origins = os.getenv("CORS_ORIGINS", "")
+    for origin in extra_origins.split(","):
+        cleaned = origin.strip().rstrip("/")
+        if cleaned:
+            origins.add(cleaned)
+
+    return sorted(origins)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     start_scheduler()
@@ -19,11 +41,7 @@ app = FastAPI(title="FRAM API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "https://fram-frontend.vercel.app",
-    ],
+    allow_origins=_build_allowed_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )

@@ -2,10 +2,14 @@ import os
 import time
 import requests
 from datetime import datetime
+from urllib.parse import urlencode
 
 UPSTOX_API_KEY    = os.getenv("UPSTOX_API_KEY")
 UPSTOX_API_SECRET = os.getenv("UPSTOX_API_SECRET")
-UPSTOX_REDIRECT_URI = os.getenv("UPSTOX_REDIRECT_URI")
+UPSTOX_REDIRECT_URI = os.getenv(
+    "UPSTOX_REDIRECT_URI",
+    "https://web-production-06c6e.up.railway.app/data/upstox/callback",
+)
 BASE_URL = "https://api.upstox.com/v2"
 
 _token_state = {
@@ -23,11 +27,15 @@ def auth_required_response() -> dict:
     }
 
 def get_auth_url() -> str:
+    query = urlencode(
+        {
+            "response_type": "code",
+            "client_id": UPSTOX_API_KEY,
+            "redirect_uri": UPSTOX_REDIRECT_URI,
+        }
+    )
     return (
-        f"{BASE_URL}/login/authorization/dialog"
-        f"?response_type=code"
-        f"&client_id={UPSTOX_API_KEY}"
-        f"&redirect_uri={UPSTOX_REDIRECT_URI}"
+        f"{BASE_URL}/login/authorization/dialog?{query}"
     )
 
 def exchange_code_for_token(auth_code: str) -> dict:

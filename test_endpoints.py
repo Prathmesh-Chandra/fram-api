@@ -4,12 +4,14 @@ Run with: python -m pytest test_endpoints.py -v
 Or run directly: python test_endpoints.py
 """
 
-import requests
-import json
 import sys
 from typing import Dict, Any
+import pytest
+from fastapi.testclient import TestClient
 
-BASE_URL = "http://localhost:8000"
+from app.main import app
+
+client = TestClient(app)
 
 # NIFTY 50 tickers to test
 VALID_TICKERS = [
@@ -26,10 +28,10 @@ INVALID_TICKERS = [
 ]
 
 
-def test_history_endpoint_returns_200(ticker: str) -> Dict[str, Any]:
+@pytest.mark.parametrize("ticker", VALID_TICKERS)
+def test_history_endpoint_returns_200(ticker: str) -> None:
     """Test that a valid ticker returns 200 with properly structured JSON."""
-    url = f"{BASE_URL}/data/history?ticker={ticker}&period=6mo"
-    response = requests.get(url)
+    response = client.get("/data/history", params={"ticker": ticker, "period": "6mo"})
     assert response.status_code == 200, f"{ticker}: expected 200, got {response.status_code}"
     
     data = response.json()
@@ -61,13 +63,10 @@ def test_history_endpoint_returns_200(ticker: str) -> Dict[str, Any]:
     for val in data["volume"]:
         assert val is None or isinstance(val, int), f"{ticker}: volume should be int or None"
     
-    return data
-
-
+@pytest.mark.parametrize("ticker", INVALID_TICKERS)
 def test_history_endpoint_returns_404(ticker: str) -> None:
     """Test that invalid tickers return 404 with proper error message."""
-    url = f"{BASE_URL}/data/history?ticker={ticker}&period=6mo"
-    response = requests.get(url)
+    response = client.get("/data/history", params={"ticker": ticker, "period": "6mo"})
     assert response.status_code == 404, f"{ticker}: expected 404, got {response.status_code}"
     
     error = response.json()
@@ -168,10 +167,6 @@ if __name__ == "__main__":
     try:
         success = run_tests()
         sys.exit(0 if success else 1)
-    except requests.exceptions.ConnectionError:
-        print("\n✗ ERROR: Cannot connect to API at {BASE_URL}")
-        print("  Make sure uvicorn is running: uvicorn app.main:app --reload")
-        sys.exit(1)
     except Exception as e:
         print(f"\n✗ ERROR: {e}")
         sys.exit(1)

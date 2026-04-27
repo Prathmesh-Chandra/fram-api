@@ -19,8 +19,35 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import re
+import yfinance as yf
 
 from app.utils.upstox_client import get_historical_candles
+
+
+def _fetch_price_df_yfinance(ticker: str, period: str) -> pd.DataFrame:
+    raw = yf.download(
+        ticker,
+        period=period,
+        auto_adjust=True,
+        progress=False,
+    )
+
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw.columns = raw.columns.droplevel(1)
+
+    if "Close" not in raw.columns or "Volume" not in raw.columns:
+        raise ValueError(f"Fallback data unavailable for {ticker}")
+
+    df = pd.DataFrame(
+        {
+            "Close": pd.to_numeric(raw["Close"], errors="coerce"),
+            "Volume": pd.to_numeric(raw["Volume"], errors="coerce"),
+        },
+        index=pd.to_datetime(raw.index, errors="coerce"),
+    ).dropna()
+
+    df.sort_index(inplace=True)
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -49,27 +76,26 @@ def fetch_price_df(ticker: str, period: str = "6mo") -> pd.DataFrame:
 
     lookback_days = int(day_match.group(1)) if day_match else None
 
+    df = None
     response = get_historical_candles(ticker=ticker, period=period, interval="day")
-    if response.get("status_code") == 401 or response.get("error") == "AUTH_REQUIRED":
-        raise PermissionError("UPSTOX_AUTH_REQUIRED")
-    if response.get("status") != "success":
-        raise ValueError(response.get("message") or f"Failed to fetch historical candles for {ticker}")
+    if response.get("status") == "success":
+        candles = response.get("data", [])
+        if candles:
+            tmp = pd.DataFrame(candles)
+            if {"date", "close", "volume"}.issubset(tmp.columns):
+                df = pd.DataFrame(
+                    {
+                        "Close": pd.to_numeric(tmp["close"], errors="coerce"),
+                        "Volume": pd.to_numeric(tmp["volume"], errors="coerce"),
+                    },
+                    index=pd.to_datetime(tmp["date"], errors="coerce"),
+                ).dropna()
 
-    candles = response.get("data", [])
-    if not candles:
-        raise ValueError(f"No historical candles returned for {ticker}")
-
-    df = pd.DataFrame(candles)
-    if not {"date", "close", "volume"}.issubset(df.columns):
-        raise ValueError(f"Historical candle payload missing required fields for {ticker}")
-
-    df = pd.DataFrame(
-        {
-            "Close": pd.to_numeric(df["close"], errors="coerce"),
-            "Volume": pd.to_numeric(df["volume"], errors="coerce"),
-        },
-        index=pd.to_datetime(df["date"], errors="coerce"),
-    ).dropna()
+    # Emergency reliability fallback for demos/presentations when Upstox auth
+    # is unavailable or a symbol has temporary API lookup issues.
+    if df is None or df.empty:
+        fallback_period = "1y" if day_match else period
+        df = _fetch_price_df_yfinance(ticker=ticker, period=fallback_period)
 
     df.sort_index(inplace=True)
 

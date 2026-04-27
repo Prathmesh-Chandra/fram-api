@@ -45,9 +45,13 @@ def calculate_parametric_var(returns: pd.Series, conf_levels: List[float] = CONF
         
     return var_results
 
-def calculate_monte_carlo_var(returns: pd.Series, n_sims: int = 50000, conf_levels: List[float] = CONFIDENCE_LEVELS) -> Dict[str, Any]:
-    """Simulates 50,000 return paths to extract empirical VaR (Optional Target)."""
-    np.random.seed(42) # For reproducible API responses
+def calculate_monte_carlo_var(
+    returns: pd.Series,
+    n_sims: int = 50000,
+    conf_levels: List[float] = CONFIDENCE_LEVELS,
+    sample_size_for_payload: int = 12000,
+) -> Dict[str, Any]:
+    """Simulates return paths to extract empirical VaR and chart-ready samples."""
     mu = returns.mean()
     sigma = returns.std()
     simulated_returns = np.random.normal(mu, sigma, n_sims)
@@ -58,6 +62,13 @@ def calculate_monte_carlo_var(returns: pd.Series, n_sims: int = 50000, conf_leve
         # Empirical percentile of the simulated distribution
         var_value = -np.percentile(simulated_returns, percentile)
         var_results[f"mc_var_{int(cl * 100)}_pct"] = round(var_value * 100, 4)
+
+    # Send a bounded sample for frontend histograms without bloating payloads.
+    payload_sample = simulated_returns
+    if sample_size_for_payload and len(simulated_returns) > sample_size_for_payload:
+        payload_sample = np.random.choice(simulated_returns, size=sample_size_for_payload, replace=False)
+
+    var_results["simulated_returns_pct_sample"] = np.round(payload_sample * 100, 6).tolist()
         
     return var_results
 

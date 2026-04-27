@@ -35,14 +35,16 @@ def compute_turnover_inr(close: pd.Series, volume: pd.Series) -> pd.Series:
 
 def compute_turnover_ratio(
     turnover_inr: pd.Series,
-    market_cap_inr: pd.Series,
+    baseline_window: int = 60,
 ) -> pd.Series:
     """
-    Turnover ratio = daily traded value / market capitalization.
+    Turnover ratio = daily traded value / rolling mean traded value.
 
-    Equivalent interpretation: fraction of market cap traded per day.
+    This keeps the liquidity proxy fully data-driven from price/volume candles
+    without requiring external static market-cap metadata.
     """
-    return (turnover_inr / market_cap_inr).replace([np.inf, -np.inf], np.nan)
+    baseline = turnover_inr.rolling(baseline_window, min_periods=20).mean()
+    return (turnover_inr / baseline).replace([np.inf, -np.inf], np.nan)
 
 
 def get_market_cap_series(ticker: str, close: pd.Series) -> tuple[pd.Series, str]:
@@ -143,8 +145,8 @@ def build_liquidity_df(df: pd.DataFrame, ticker: str) -> tuple[pd.DataFrame, str
     out = df.copy()
 
     out["Turnover_INR"] = compute_turnover_inr(out["Close"], out["Volume"])
-    market_cap_inr, method = get_market_cap_series(ticker, out["Close"])
-    out["Turnover_Ratio"] = compute_turnover_ratio(out["Turnover_INR"], market_cap_inr)
+    method = "value_over_rolling_turnover_mean"
+    out["Turnover_Ratio"] = compute_turnover_ratio(out["Turnover_INR"])
 
     out["Amihud_Raw"], out["Amihud_MA"] = compute_amihud(
         out["Log_Return"], out["Turnover_INR"]

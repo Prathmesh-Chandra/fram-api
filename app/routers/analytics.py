@@ -86,6 +86,15 @@ async def volatility_endpoint(req: VolatilityRequest):
         )
         return {"status": "success", "data": result}
 
+    except PermissionError:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "UPSTOX_AUTH_REQUIRED",
+                "message": "Upstox login required",
+                "login_url": "/data/upstox/login",
+            },
+        )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
@@ -118,6 +127,15 @@ async def liquidity_endpoint(req: LiquidityRequest):
         )
         return {"status": "success", "data": result}
 
+    except PermissionError:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "UPSTOX_AUTH_REQUIRED",
+                "message": "Upstox login required",
+                "login_url": "/data/upstox/login",
+            },
+        )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
@@ -212,6 +230,15 @@ async def part_a_combined(req: PartARequest):
             },
         }
 
+    except PermissionError:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "UPSTOX_AUTH_REQUIRED",
+                "message": "Upstox login required",
+                "login_url": "/data/upstox/login",
+            },
+        )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:

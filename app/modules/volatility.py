@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
 import re
+
+from app.utils.upstox_client import get_historical_candles
 
 
 # ---------------------------------------------------------------------------
@@ -46,35 +47,30 @@ def fetch_price_df(ticker: str, period: str = "6mo") -> pd.DataFrame:
     period = (period or "6mo").strip().lower()
     day_match = re.fullmatch(r"(\d+)d", period)
 
-    if day_match:
-        # yfinance period does not reliably support arbitrary Nd values,
-        # so fetch a broader horizon then trim to the latest N trading rows.
-        lookback_days = int(day_match.group(1))
-        raw = yf.download(
-            ticker,
-            period="1y",
-            auto_adjust=True,
-            progress=False,
-        )
-    else:
-        lookback_days = None
-        raw = yf.download(
-            ticker,
-            period=period,
-            auto_adjust=True,
-            progress=False,
-        )
+    lookback_days = int(day_match.group(1)) if day_match else None
 
-    # yfinance sometimes returns a MultiIndex on single-ticker downloads
-    if isinstance(raw.columns, pd.MultiIndex):
-        raw.columns = raw.columns.droplevel(1)
+    response = get_historical_candles(ticker=ticker, period=period, interval="day")
+    if response.get("status_code") == 401 or response.get("error") == "AUTH_REQUIRED":
+        raise PermissionError("UPSTOX_AUTH_REQUIRED")
+    if response.get("status") != "success":
+        raise ValueError(response.get("message") or f"Failed to fetch historical candles for {ticker}")
 
-    df = pd.DataFrame({
-        "Close":  raw["Close"],
-        "Volume": raw["Volume"],
-    }).dropna()
+    candles = response.get("data", [])
+    if not candles:
+        raise ValueError(f"No historical candles returned for {ticker}")
 
-    df.index = pd.to_datetime(df.index)
+    df = pd.DataFrame(candles)
+    if not {"date", "close", "volume"}.issubset(df.columns):
+        raise ValueError(f"Historical candle payload missing required fields for {ticker}")
+
+    df = pd.DataFrame(
+        {
+            "Close": pd.to_numeric(df["close"], errors="coerce"),
+            "Volume": pd.to_numeric(df["volume"], errors="coerce"),
+        },
+        index=pd.to_datetime(df["date"], errors="coerce"),
+    ).dropna()
+
     df.sort_index(inplace=True)
 
     if lookback_days is not None:

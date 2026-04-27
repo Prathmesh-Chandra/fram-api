@@ -35,9 +35,12 @@ def _run_single_var_pipeline(ticker: str, period: str) -> dict:
     regime_var = var_by_regime(df)
     mc_var = calculate_monte_carlo_var(returns)
     garch_var = calculate_garch_var(returns)
+
+    empirical_returns_pct = (returns * 100).round(6).tolist()
     
     return {
         "ticker": ticker,
+        "empirical_returns_pct": empirical_returns_pct,
         "parametric_regime_var": regime_var,
         "monte_carlo_var": mc_var,
         "garch_var": garch_var
@@ -73,6 +76,15 @@ async def compare_var(req: VarCompareRequest):
             }
         }
         
+    except PermissionError:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "UPSTOX_AUTH_REQUIRED",
+                "message": "Upstox login required",
+                "login_url": "/data/upstox/login",
+            },
+        )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:

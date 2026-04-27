@@ -1,7 +1,7 @@
 import os
 import time
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlencode, urlparse
 
 
@@ -131,6 +131,117 @@ def _request_upstox(path: str, params: dict) -> dict:
         return response.json()
     except requests.exceptions.RequestException as e:
         return {"error": f"Upstox API request failed: {str(e)}"}
+
+
+def _period_to_calendar_days(period: str) -> int:
+    p = (period or "6mo").strip().lower()
+    mapping = {
+        "1mo": 35,
+        "3mo": 100,
+        "6mo": 200,
+        "1y": 380,
+    }
+    if p in mapping:
+        return mapping[p]
+    if p.endswith("d") and p[:-1].isdigit():
+        # Add a margin for weekends/holidays.
+        return int(p[:-1]) + 30
+    return 200
+
+
+def _resolve_historical_key_candidates(ticker: str) -> list[str]:
+    from app.data.instrument_keys import get_instrument_key_candidates, normalize_ticker
+
+    normalized_ticker = normalize_ticker(ticker)
+    candidates = get_instrument_key_candidates(normalized_ticker)
+    return candidates
+
+
+def _parse_upstox_candle_row(row: list) -> dict | None:
+    if not isinstance(row, list) or len(row) < 6:
+        return None
+
+    # Upstox candle row format is expected as:
+    # [timestamp, open, high, low, close, volume, ...]
+    ts_raw = row[0]
+    try:
+        ts = str(ts_raw)
+        if "T" in ts:
+            date_key = datetime.fromisoformat(ts.replace("Z", "+00:00")).strftime("%Y-%m-%d")
+        else:
+            date_key = ts[:10]
+
+        return {
+            "date": date_key,
+            "open": float(row[1]),
+            "high": float(row[2]),
+            "low": float(row[3]),
+            "close": float(row[4]),
+            "volume": int(float(row[5])) if row[5] is not None else 0,
+        }
+    except (ValueError, TypeError):
+        return None
+
+
+def get_historical_candles(ticker: str, period: str = "6mo", interval: str = "day") -> dict:
+    """
+    Fetch historical candles from Upstox for a mapped NSE equity instrument.
+
+    Returns
+    -------
+    {
+      status: "success" | "error",
+      data: [{date, open, high, low, close, volume}, ...],
+      instrument_key_used: str,
+      period: str,
+      interval: str,
+      ...auth fields on 401
+    }
+    """
+    if not is_authenticated():
+        return auth_required_response()
+
+    candidates = _resolve_historical_key_candidates(ticker)
+    if not candidates:
+        return {
+            "status": "error",
+            "message": f"Ticker '{ticker}' is not mapped to an Upstox instrument key",
+        }
+
+    to_date = datetime.now().date()
+    from_date = to_date - timedelta(days=_period_to_calendar_days(period))
+
+    for instrument_key in candidates:
+        path = f"/historical-candle/{instrument_key}/{interval}/{to_date.isoformat()}/{from_date.isoformat()}"
+        payload = _request_upstox(path, {})
+        if "error" in payload:
+            continue
+
+        candles = payload.get("data", {}).get("candles", [])
+        if not candles:
+            continue
+
+        parsed = [_parse_upstox_candle_row(row) for row in candles]
+        parsed = [row for row in parsed if row is not None]
+        parsed.sort(key=lambda row: row["date"])
+
+        if not parsed:
+            continue
+
+        return {
+            "status": "success",
+            "period": period,
+            "interval": interval,
+            "instrument_key_used": instrument_key,
+            "data": parsed,
+        }
+
+    return {
+        "status": "error",
+        "message": f"Failed to fetch historical candles from Upstox for {ticker}",
+        "period": period,
+        "interval": interval,
+    }
 
 
 def _get_user_display_name() -> str | None:

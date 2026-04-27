@@ -299,6 +299,15 @@ async def part_b_pricing_table(req: PartBRequest):
 
     except HTTPException:
         raise
+    except PermissionError:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "UPSTOX_AUTH_REQUIRED",
+                "message": "Upstox login required",
+                "login_url": "/data/upstox/login",
+            },
+        )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
